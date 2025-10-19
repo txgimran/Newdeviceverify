@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Device Verification</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Arial', sans-serif;
+    }
+    
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      transition: background 0.5s ease;
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+    }
+    
+    .screen {
+      text-align: center;
+      width: 100%;
+      max-width: 400px;
+      padding: 40px 20px;
+    }
+    
+    .icon {
+      font-size: 6rem;
+      margin-bottom: 30px;
+      animation: spin 1.5s linear infinite;
+      filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.5));
+    }
+    
+    .title {
+      font-size: 2.5rem;
+      font-weight: bold;
+      margin-bottom: 15px;
+      color: white;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    }
+    
+    .message {
+      font-size: 1.2rem;
+      color: rgba(255, 255, 255, 0.9);
+      margin-bottom: 40px;
+      line-height: 1.5;
+    }
+    
+    .btn {
+      padding: 15px 40px;
+      border: none;
+      border-radius: 50px;
+      font-size: 1.1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: white;
+      color: #333;
+      box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    }
+    
+    .btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    .hidden {
+      display: none;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+      100% { transform: scale(1); }
+    }
+    
+    .pulse {
+      animation: pulse 2s infinite;
+    }
+    
+    .countdown {
+      font-size: 1rem;
+      color: rgba(255, 255, 255, 0.7);
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loadingScreen" class="screen">
+    <div class="icon">🔄</div>
+    <div class="title">Verifying Device</div>
+    <div class="message">Please wait while we check your device...</div>
+    <div id="countdown" class="countdown">Checking in 2 seconds</div>
+  </div>
+
+  <!-- VPN Blocked Screen -->
+  <div id="vpnScreen" class="screen hidden">
+    <div class="icon">📵</div>
+    <div class="title">VPN Not Allowed</div>
+    <div class="message">Please disable VPN and try again</div>
+    <button class="btn" onclick="closeWindow()">Close</button>
+  </div>
+
+  <!-- Same Device Screen -->
+  <div id="sameDeviceScreen" class="screen hidden">
+    <div class="icon">❌</div>
+    <div class="title">Same Device Not Allow</div>
+    <div class="message">This device has already been verified</div>
+    <button class="btn" onclick="closeWindow()">Close</button>
+  </div>
+
+  <!-- Verified Success Screen -->
+  <div id="successScreen" class="screen hidden">
+    <div class="icon pulse">✅</div>
+    <div class="title">Verified Success</div>
+    <div class="message">Device verification completed</div>
+    <button class="btn" onclick="closeWindow()">Back</button>
+  </div>
+
+  <script>
+    // DOM Elements
+    const loadingScreen = document.getElementById('loadingScreen');
+    const vpnScreen = document.getElementById('vpnScreen');
+    const sameDeviceScreen = document.getElementById('sameDeviceScreen');
+    const successScreen = document.getElementById('successScreen');
+    const countdownElement = document.getElementById('countdown');
+
+    // URL Parameters
+    const params = new URLSearchParams(window.location.search);
+    const webhookUrl = decodeURIComponent(params.get("webhookUrl") || "");
+    const botId = params.get("botId") || "";
+
+    // Device verification tracking
+    const VERIFIED_DEVICES_KEY = 'verifiedDevices';
+    
+    // Start verification immediately
+    document.addEventListener('DOMContentLoaded', startVerification);
+
+    async function startVerification() {
+      try {
+        // Show 2-second countdown
+        let secondsLeft = 2;
+        countdownElement.textContent = `Checking in ${secondsLeft} seconds`;
+        
+        const countdownInterval = setInterval(() => {
+          secondsLeft--;
+          if (secondsLeft > 0) {
+            countdownElement.textContent = `Checking in ${secondsLeft} second${secondsLeft > 1 ? 's' : ''}`;
+          } else {
+            countdownElement.textContent = 'Checking now...';
+            clearInterval(countdownInterval);
+          }
+        }, 1000);
+
+        // Wait for 2 seconds
+        await delay(2000);
+        
+        // Create device fingerprint (user_hash)
+        const user_hash = createUserHash();
+        
+        // Check for VPN first
+        const vpn = await checkForVPN();
+        
+        // Prepare results for bot - ALWAYS send captcha=true
+        const results = {
+          user_hash: user_hash,
+          captcha: "true",  // Always true for compatibility
+          vpn: vpn ? "true" : "false"
+        };
+        
+        if (vpn) {
+          // VPN detected - show red screen
+          document.body.style.background = "linear-gradient(135deg, #c31432 0%, #240b36 100%)";
+          showScreen('vpnScreen');
+          sendWebhook(results, "vpn_blocked");
+        } else {
+          // Check if device already verified in localStorage
+          const verifiedDevices = getVerifiedDevices();
+          const alreadyVerified = verifiedDevices.includes(user_hash);
+          
+          if (alreadyVerified) {
+            // Same device - show red screen with "Same Device Not Allow"
+            document.body.style.background = "linear-gradient(135deg, #c31432 0%, #240b36 100%)";
+            showScreen('sameDeviceScreen');
+            sendWebhook(results, "already_verified");
+          } else {
+            // New device - mark as verified and show success
+            markDeviceAsVerified(user_hash);
+            document.body.style.background = "linear-gradient(135deg, #56ab2f 0%, #a8e6cf 100%)";
+            showScreen('successScreen');
+            sendWebhook(results, "verified");
+          }
+        }
+      } catch (error) {
+        console.error('Verification error:', error);
+        document.body.style.background = "linear-gradient(135deg, #c31432 0%, #240b36 100%)";
+        showScreen('vpnScreen');
+      }
+    }
+
+    function getVerifiedDevices() {
+      try {
+        const stored = localStorage.getItem(VERIFIED_DEVICES_KEY);
+        return stored ? JSON.parse(stored) : [];
+      } catch (error) {
+        console.error('Error reading verified devices:', error);
+        return [];
+      }
+    }
+
+    function markDeviceAsVerified(user_hash) {
+      try {
+        const verifiedDevices = getVerifiedDevices();
+        if (!verifiedDevices.includes(user_hash)) {
+          verifiedDevices.push(user_hash);
+          localStorage.setItem(VERIFIED_DEVICES_KEY, JSON.stringify(verifiedDevices));
+        }
+      } catch (error) {
+        console.error('Error saving verified device:', error);
+      }
+    }
+
+    function showScreen(screenId) {
+      // Hide all screens
+      loadingScreen.classList.add('hidden');
+      vpnScreen.classList.add('hidden');
+      sameDeviceScreen.classList.add('hidden');
+      successScreen.classList.add('hidden');
+      
+      // Show the selected screen
+      document.getElementById(screenId).classList.remove('hidden');
+    }
+
+    function createUserHash() {
+      // Create a unique user_hash using multiple device attributes
+      const factors = [
+        navigator.userAgent,
+        navigator.hardwareConcurrency,
+        screen.width,
+        screen.height,
+        screen.colorDepth,
+        navigator.language,
+        new Date().getTimezoneOffset(),
+        navigator.platform,
+        navigator.deviceMemory || 'unknown',
+        navigator.maxTouchPoints || 'unknown'
+      ].join('|');
+      
+      // Create a hash
+      let hash = 0;
+      for (let i = 0; i < factors.length; i++) {
+        const char = factors.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+      }
+      
+      return Math.abs(hash).toString(36).slice(0, 12).toUpperCase();
+    }
+
+    async function checkForVPN() {
+      try {
+        const pc = new RTCPeerConnection({ iceServers: [] });
+        pc.createDataChannel('');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        return new Promise(resolve => {
+          let vpnDetected = false;
+          
+          pc.onicecandidate = (ice) => {
+            if (!ice || !ice.candidate) {
+              resolve(vpnDetected);
+              return;
+            }
+            
+            const candidate = ice.candidate.candidate;
+            if (candidate.includes('relay') || candidate.includes('srflx') || 
+                candidate.includes('turn') || candidate.includes('vpn') ||
+                candidate.includes('proxy')) {
+              vpnDetected = true;
+            }
+          };
+          
+          setTimeout(() => resolve(vpnDetected), 1500);
+        });
+      } catch (error) {
+        console.error('VPN check error:', error);
+        return false;
+      }
+    }
+
+    function sendWebhook(results, status) {
+      if (!webhookUrl) return;
+      
+      const payload = {
+        botId: botId,
+        status: status,
+        results: results,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent
+      };
+      
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      }).then(response => {
+        console.log('Webhook sent successfully');
+      }).catch(error => {
+        console.error('Webhook error:', error);
+      });
+    }
+
+    function delay(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function closeWindow() {
+      // Try multiple methods to close the window
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.close();
+      }
+      
+      setTimeout(() => {
+        window.location.href = 'about:blank';
+      }, 1000);
+      
+      setTimeout(() => {
+        const btn = document.querySelector('.btn');
+        if (btn) btn.textContent = 'You can close this tab';
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
